@@ -8,9 +8,9 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <nav_msgs/Odometry.h>
 
-#include "cloud_msgs/cloud_info.h"
+#include "cloud_msgs/msg/cloud_info.hpp"
 
-#include <opencv/cv.h>
+#include <opencv2/opencv2.hpp>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
