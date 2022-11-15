@@ -219,6 +219,8 @@ private:
     float cRoll, sRoll, cPitch, sPitch, cYaw, sYaw, tX, tY, tZ;
     float ctRoll, stRoll, ctPitch, stPitch, ctYaw, stYaw, tInX, tInY, tInZ;
 
+    tf::TransformListener _tflistener;
+
 public:
 
     
@@ -728,8 +730,33 @@ public:
             publishGlobalMap();
         }
         // save final point cloud
-        pcl::io::savePCDFileASCII(fileDirectory+"finalCloud.pcd", *globalMapKeyFramesDS);
+        if(globalMapKeyFramesDS->size()>0){
+        // pcl::io::savePCDFileASCII(fileDirectory+"finalCloud.pcd", *globalMapKeyFramesDS);
+            //transform camera_init->map
+        sensor_msgs::PointCloud2 cloudMsgTemp;
+        sensor_msgs::PointCloud pc1_in;
+        sensor_msgs::PointCloud pc1_trans;
+        sensor_msgs::PointCloud2 pc2_trans;
 
+        pcl::toROSMsg(*globalMapKeyFramesDS, cloudMsgTemp);
+        cloudMsgTemp.header.stamp = ros::Time().fromSec(timeLaserOdometry);
+        cloudMsgTemp.header.frame_id = "/camera_init";
+        sensor_msgs::convertPointCloud2ToPointCloud(cloudMsgTemp, pc1_in);
+        try{
+            _tflistener.waitForTransform("/map", cloudMsgTemp.header.frame_id, cloudMsgTemp.header.stamp, ros::Duration(1.0));
+            _tflistener.transformPointCloud("/map", cloudMsgTemp.header.stamp, pc1_in, cloudMsgTemp.header.frame_id, pc1_trans);
+            sensor_msgs::convertPointCloudToPointCloud2(pc1_trans, pc2_trans);
+            pcl::fromROSMsg(pc2_trans,*globalMapKeyFramesDS);
+        pcl::io::savePCDFileASCII(fileDirectory+"finalCloud.pcd", *globalMapKeyFramesDS);
+        }
+        catch(tf::TransformException ex){
+            ROS_ERROR("%s",ex.what());
+        }
+        }
+        else{
+            ROS_ERROR("No input topics, map save failed");
+        }
+        /*
         string cornerMapString = "/tmp/cornerMap.pcd";
         string surfaceMapString = "/tmp/surfaceMap.pcd";
         string trajectoryString = "/tmp/trajectory.pcd";
@@ -748,11 +775,11 @@ public:
         downSizeFilterCorner.setInputCloud(cornerMapCloud);
         downSizeFilterCorner.filter(*cornerMapCloudDS);
         downSizeFilterSurf.setInputCloud(surfaceMapCloud);
-        downSizeFilterSurf.filter(*surfaceMapCloudDS);
+        downSizeFilterSurf.filter(*surfaceMapCloudDS);*/
 
-        pcl::io::savePCDFileASCII(fileDirectory+"cornerMap.pcd", *cornerMapCloudDS);
-        pcl::io::savePCDFileASCII(fileDirectory+"surfaceMap.pcd", *surfaceMapCloudDS);
-        pcl::io::savePCDFileASCII(fileDirectory+"trajectory.pcd", *cloudKeyPoses3D);
+        // pcl::io::savePCDFileASCII(fileDirectory+"cornerMap.pcd", *cornerMapCloudDS);
+        // pcl::io::savePCDFileASCII(fileDirectory+"surfaceMap.pcd", *surfaceMapCloudDS);
+        // pcl::io::savePCDFileASCII(fileDirectory+"trajectory.pcd", *cloudKeyPoses3D);
     }
 
     void publishGlobalMap(){
