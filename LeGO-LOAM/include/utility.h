@@ -1,20 +1,20 @@
+#pragma once
 #ifndef _UTILITY_LIDAR_ODOMETRY_H_
 #define _UTILITY_LIDAR_ODOMETRY_H_
 
 
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
 
-#include <sensor_msgs/Imu.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <nav_msgs/Odometry.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 
-#include "cloud_msgs/msg/cloud_info.hpp"
+#include <cloud_msgs/msg/cloud_info.hpp>
 
-#include <opencv2/opencv2.hpp>
+#include <opencv2/opencv.hpp>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-#include <pcl_ros/point_cloud.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/range_image/range_image.h>
 #include <pcl/filters/filter.h>
@@ -22,9 +22,11 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/common/common.h>
 #include <pcl/registration/icp.h>
+#include "pcl/filters/impl/filter.hpp"
 
-#include <tf/transform_broadcaster.h>
-#include <tf/transform_datatypes.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2_ros/transform_broadcaster.h>
+// #include <tf2_ros/transform_datatypes.h>
  
 #include <vector>
 #include <cmath>
@@ -48,13 +50,88 @@
 
 using namespace std;
 
+template < typename T >
+double ROS_TIME(T msg)
+{
+  return msg->header.stamp.sec +
+         msg->header.stamp.nanosec * 1e-9;
+}
+
+
 typedef pcl::PointXYZI  PointType;
 
+class ParamServer : public rclcpp::Node
+{
+public:
+  string pointCloudTopic;
+  string imuTopic;
+  string odomTopic;
+
+  // Lidar Sensor Configuration
+  int N_SCAN;
+  int Horizon_SCAN;
+  float ang_res_x;
+  float ang_res_y;
+  bool useCloudRing;
+  float ang_bottom;
+  int groundScanInd;
+  float sensorMountAngle;
+  int segmentValidPointNum;
+  int segmentValidLineNum;
+  float surfThreshold;
+  float edgeThreshold;
+  int nearestFeatureSearchSqDist;
+  float scanPeriod;
+  // int imuQueLength;
+
+  ParamServer(std::string node_name, const rclcpp::NodeOptions & options)
+    : Node(node_name, options)
+  {
+    declare_parameter("pointCloudTopic", "points_raw");
+    get_parameter("pointCloudTopic", pointCloudTopic);
+    declare_parameter("imuTopic", "imu_correct");
+    get_parameter("imuTopic", imuTopic);
+    declare_parameter("odomTopic", "preintegrated_odom");
+    get_parameter("odomTopic", odomTopic);
+
+    declare_parameter("N_SCAN", 16);
+    get_parameter("N_SCAN", N_SCAN);
+    declare_parameter("Horizon_SCAN", 1800);
+    get_parameter("Horizon_SCAN", Horizon_SCAN);
+    declare_parameter("ang_res_x",0.2);
+    get_parameter("ang_res_x",ang_res_x);
+    declare_parameter("ang_res_y",2.0);
+    get_parameter("ang_res_y",ang_res_y);
+    declare_parameter("useCloudRing",true);
+    get_parameter("useCloudRing",useCloudRing);
+    declare_parameter("ang_bottom",15.0+0.1);
+    get_parameter("ang_bottom",ang_bottom);
+    declare_parameter("groundScanInd",7);
+    get_parameter("groundScanInd",groundScanInd);
+    declare_parameter("sensorMountAngle",0.0);
+    get_parameter("sensorMountAngle",sensorMountAngle);
+    declare_parameter("segmentValidPointNum",5);
+    get_parameter("segmentValidPointNum",segmentValidPointNum);
+    declare_parameter("segmentValidLineNum",3);
+    get_parameter("segmentValidLineNum",segmentValidLineNum);
+    declare_parameter("nearestFeatureSearchSqDist",25);
+    get_parameter("nearestFeatureSearchSqDist",nearestFeatureSearchSqDist);
+    declare_parameter("edgeThreshold",5.0);
+    get_parameter("edgeThreshold",edgeThreshold);
+    declare_parameter("surfThreshold",0.1);
+    get_parameter("surfThreshold",surfThreshold);
+    declare_parameter("scanPeriod",0.1);
+    get_parameter("scanPeriod",scanPeriod);
+    // declare_parameter("imuQueLength",200);
+    // get_parameter("imuQueLength",imuQueLength);
+
+};
+/*
 extern const string pointCloudTopic = "/velodyne_points";
-extern const string imuTopic = "/imu/data";
+// extern const string imuTopic = "/imu/data";
 
 // Save pcd
-extern const string fileDirectory = "/tmp/";
+extern const string fileDirectory = "/home/asahi/";
 
 // Using velodyne cloud "ring" channel for image projection (other lidar may have different name for this channel, change "PointXYZIR" below)
 extern const bool useCloudRing = true; // if true, ang_res_y and ang_bottom are not used
@@ -135,56 +212,7 @@ extern const float historyKeyframeFitnessScore = 0.3; // the smaller the better 
 
 extern const float globalMapVisualizationSearchRadius = 500.0; // key frames with in n meters will be visualized
 
-
-struct smoothness_t{ 
-    float value;
-    size_t ind;
-};
-
-struct by_value{ 
-    bool operator()(smoothness_t const &left, smoothness_t const &right) { 
-        return left.value < right.value;
-    }
-};
-
-/*
-    * A point cloud type that has "ring" channel
-    */
-struct PointXYZIR
-{
-    PCL_ADD_POINT4D
-    PCL_ADD_INTENSITY;
-    uint16_t ring;
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-} EIGEN_ALIGN16;
-
-POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIR,  
-                                   (float, x, x) (float, y, y)
-                                   (float, z, z) (float, intensity, intensity)
-                                   (uint16_t, ring, ring)
-)
-
-/*
-    * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is time stamp)
-    */
-struct PointXYZIRPYT
-{
-    PCL_ADD_POINT4D
-    PCL_ADD_INTENSITY;
-    float roll;
-    float pitch;
-    float yaw;
-    double time;
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-} EIGEN_ALIGN16;
-
-POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRPYT,
-                                   (float, x, x) (float, y, y)
-                                   (float, z, z) (float, intensity, intensity)
-                                   (float, roll, roll) (float, pitch, pitch) (float, yaw, yaw)
-                                   (double, time, time)
-)
-
 typedef PointXYZIRPYT  PointTypePose;
-
+*/
+};
 #endif
